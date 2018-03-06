@@ -1,17 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"html/template"
-	"io/ioutil"
 	"log"
+	// "mime"
 	"net/http"
 	"os/exec"
-	"time"
 )
 
-// Target command: wkhtmltopdf - -
+// The server uses the external command: wkhtmltopdf - -
 
 var doc = `<html><p>Hello, {{ .Name }}!</p></html>`
 
@@ -22,64 +20,49 @@ type Attrs struct {
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
-	// Get the name from the path
-	path := r.URL.Path[1:] // Remove initial /
+	path := r.URL.Path[1:] // Use the path as a name, removing the initial /
 	if path == "" {
-		// Sane default
-		path = "Golang PDF"
+		path = "Golang PDF" // Sane default
 	}
 
-	attrs := Attrs{Name: path}
+	// NOTE: to force a download of the generated PDF, add the following
+	// lines and import the "mime" package
+	// h := fmt.Sprintf("attachment; filename=%s", "output.pdf")
+	// w.Header().Set("Content-Disposition", h)
+	// w.Header().Set("Content-Type", mime.TypeByExtension(".pdf"))
 
 	// Prepare the command to read from std in and write to std out
 	wkhtmltopdf := exec.Command("wkhtmltopdf", "-", "-")
+	wkhtmltopdf.Stdout = w
 
 	input, err := wkhtmltopdf.StdinPipe()
 	if err != nil {
-		log.Panic("in err", err)
-	}
-
-	output, err := wkhtmltopdf.StdoutPipe()
-	if err != nil {
-		log.Panic("out err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	// Begin the command
 	if err = wkhtmltopdf.Start(); err != nil {
-		log.Panic("run err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	// Write the html template to std in and close
-	if err = tmpl.Execute(input, attrs); err != nil {
-		log.Panic("template err", err)
+	if err = tmpl.Execute(input, Attrs{Name: path}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	if err = input.Close(); err != nil {
-		log.Panic("close err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	// Read the generated PDF from std out
-	b, err := ioutil.ReadAll(output)
-	if err != nil {
-		log.Fatal("io err", err)
-	}
-
-	// End the command
+	// Wait for the command to end
 	if err = wkhtmltopdf.Wait(); err != nil {
-		log.Fatal("wait err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-
-	// Convert to a read seeker
-	// TODO Can't the stdout be converted to a readseeker without reading?
-	f := bytes.NewReader(b)
-
-	filename := "output.pdf"
-	h := fmt.Sprintf("attachment; filename=%s", filename)
-	w.Header().Set("Content-Disposition", h)
-
-	// TODO Set mimetype
-
-	http.ServeContent(w, r, filename, time.Now(), f)
 }
 
 func main() {
